@@ -33,10 +33,10 @@ Hardware Thermistors  →  Virtual Sensors  →  VIRTUAL-SKIN  →  Throttle / C
 
 **VIRTUAL-SKIN** takes the *maximum* of all intermediate sensors to answer: *"How hot does the back glass feel right now?"* — and it's the only thing that triggers user-facing throttling.
 
-**The problem:** Stock config polls this sensor every **5 minutes**. By the time it reacts, your phone is already a hand warmer. This mod fixes that.
+**The problem:** Stock config polls this sensor every **5 minutes**. By the time it reacts, your phone is already a hand warmer.
 
 ### 🛠️ The Fix: Waking Up The Brain
-This module changes the `PollingDelay` value for all the zones listed above from **300000ms** (5 minutes) down to **5000ms** (5 seconds).
+This module changes the `PollingDelay` value from **300000ms** (5 minutes) down to **5000ms** (5 seconds).
 
 Now, instead of napping for the length of a song, the thermal engine checks in every 5 seconds. This allows it to apply **micro-throttling** (small, almost imperceptible frequency adjustments) the moment heat starts to build, rather than slamming the brakes on the CPU 4 minutes too late.
 
