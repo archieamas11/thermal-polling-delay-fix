@@ -1,4 +1,3 @@
-
 # 🔥 Virtual Skin Polling Delay Fix for Pixel 7 Pro
 
 *Because waiting 5 minutes to realize you're on fire is a terrible strategy.*
@@ -47,7 +46,7 @@ Now, instead of napping for the length of a song, the thermal engine checks in e
 * Root access is required.
 * Tested only on **KernelSU Next**.
 * Requires **Mountify module**.
-* Tested on **Android 16 QPR3 (April Security Patch)**.
+* Tested on **Stock Android 16 QPR3 (April Security Patch)**.
 
 **Notes:**
 
