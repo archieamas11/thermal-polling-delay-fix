@@ -1,0 +1,146 @@
+name: Build Magisk Module Zip
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create a GitHub Release with the zip attached"
+        type: boolean
+        default: false
+      tag_name:
+        description: "Release tag (leave blank to use version from module.prop, e.g. v2.1)"
+        type: string
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Package flashable zip
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read module metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ ! -f module.prop ]; then
+            echo "::error file=module.prop::module.prop not found at repository root"
+            exit 1
+          fi
+
+          MODULE_ID="$(grep -E '^id=' module.prop | head -n1 | cut -d= -f2- | tr -d '\r')"
+          MODULE_VERSION="$(grep -E '^version=' module.prop | head -n1 | cut -d= -f2- | tr -d '\r')"
+          MODULE_VERSION_CODE="$(grep -E '^versionCode=' module.prop | head -n1 | cut -d= -f2- | tr -d '\r')"
+
+          if [ -z "${MODULE_ID}" ] || [ -z "${MODULE_VERSION}" ]; then
+            echo "::error::Could not parse id/version from module.prop"
+            exit 1
+          fi
+
+          SAFE_VERSION="$(echo "${MODULE_VERSION}" | tr -c 'A-Za-z0-9._-' '_')"
+          ZIP_BASENAME="${MODULE_ID}-${SAFE_VERSION}"
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          ZIP_NAME="${ZIP_BASENAME}-${SHORT_SHA}.zip"
+
+          echo "module_id=${MODULE_ID}"                 >> "$GITHUB_OUTPUT"
+          echo "module_version=${MODULE_VERSION}"       >> "$GITHUB_OUTPUT"
+          echo "module_version_code=${MODULE_VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "zip_basename=${ZIP_BASENAME}"           >> "$GITHUB_OUTPUT"
+          echo "zip_name=${ZIP_NAME}"                   >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"                 >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Module metadata"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| id | \`${MODULE_ID}\` |"
+            echo "| version | \`${MODULE_VERSION}\` |"
+            echo "| versionCode | \`${MODULE_VERSION_CODE}\` |"
+            echo "| zip | \`${ZIP_NAME}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify required module files
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in module.prop META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::required file is missing"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Create flashable zip
+        id: zip
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ZIP_PATH="dist/${{ steps.meta.outputs.zip_name }}"
+
+          # Magisk modules must be zipped with files at the archive root
+          # (module.prop at top level). We exclude VCS and CI metadata.
+          zip -r -X "$ZIP_PATH" . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".gitignore" \
+            -x ".gitattributes" \
+            -x "dist/*" \
+            -x "*.zip"
+
+          echo "zip_path=${ZIP_PATH}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Zip contents:"
+          unzip -l "$ZIP_PATH"
+
+          {
+            echo ""
+            echo "### Zip contents"
+            echo ""
+            echo '```'
+            unzip -l "$ZIP_PATH"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.zip_basename }}
+          path: ${{ steps.zip.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Resolve release tag
+        if: ${{ inputs.release }}
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ steps.meta.outputs.module_version }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: ${{ inputs.release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.meta.outputs.module_id }} ${{ steps.tag.outputs.tag }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: ${{ steps.zip.outputs.zip_path }}
