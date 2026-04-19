@@ -1,6 +1,6 @@
-id=thermal_skin_polling_fix
+id=thermal_polling_delay_fix
 name=Thermal Skin Polling Fix
-version=v2.1
+version=v1.1
 versionCode=3
 author=rico
 description=Reduces PollingDelay from 300000ms to 5000ms for all VIRTUAL-SKIN sensors. Pixel 7 Pro (cheetah) only. Uses Mountify overlay.
