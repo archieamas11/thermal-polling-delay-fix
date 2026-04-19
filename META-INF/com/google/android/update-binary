@@ -1,0 +1,4 @@
+#!/sbin/sh
+SKIPUNZIP=1
+unzip -o "$ZIPFILE" -x 'META-INF/*' -d "$MODPATH" >/dev/null 2>&1
+. "$MODPATH/customize.sh"
