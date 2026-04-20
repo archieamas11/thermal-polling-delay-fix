@@ -1,4 +1,4 @@
-# 🔥 Stop your Pixel 7 Pro from being a hand warmer
+# 🔥 Stop your Pixel Devices from being a hand warmer
 
 ## The Problem
 
@@ -27,7 +27,7 @@ Now the thermal engine applies small, smooth throttling adjustments as heat buil
 ## 📥 Installation
 
 **Requirements:**
-- Pixel 7 Pro (Cheetah) — *other P7 series untested*
+- Pixel 7&8 Series — *other Pixel series is not yet supported*
 - Root access
 - Tested on: KernelSU Next + Mountify module + Stock Android 16 QPR3
 
