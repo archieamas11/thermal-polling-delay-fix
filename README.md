@@ -27,14 +27,14 @@ Now the thermal engine applies small, smooth throttling adjustments as heat buil
 ## 📥 Installation
 
 **Requirements:**
-- Pixel 7&8 Series — *other Pixel series is not yet supported*
+- Pixel 7&8 Series — *other Pixel series is not yet supported but feel free to contact me to make your pixel supported*
 - Root access
-- Tested on: KernelSU Next + Mountify module + Stock Android 16 QPR3
+- Tested on: KernelSU Next + Mountify module + Stock Android 16 QPR3 *Other roms is untested but it should work fine*
 
 **Steps:**
-1. Flash the module via KernelSU / Magisk
+1. Flash the module via KernelSU
 2. Reboot
 
-**Note:** May work on other Android versions or Magisk, but not guaranteed.
+**Note:** May work on other Android versions, but not guaranteed.
 
 **⚠️ Disclaimer:** Use at your own risk. No warranties.
