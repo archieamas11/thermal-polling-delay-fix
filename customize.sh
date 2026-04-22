@@ -1,7 +1,5 @@
 #!/system/bin/sh
 MODDIR="${MODPATH}"
-THERMAL_SRC="/vendor/etc/thermal_info_config.json"
-OVERLAY_DEST="${MODDIR}/system/vendor/etc/thermal_info_config.json"
 
 NEW_DELAY="5000"
 
@@ -31,15 +29,16 @@ ui_info "Checking device compatibility..."
 DEVICE=$(getprop ro.product.device)
 ui_info "Detected device: ${DEVICE}"
 
-# List of supported devices and their sensors
 case "${DEVICE}" in
   cheetah|lynx|panther)
     FAMILY="Tensor G2"
     SENSORS="VIRTUAL-SKIN VIRTUAL-SKIN-CHARGE VIRTUAL-SKIN-CPU VIRTUAL-SKIN-CPU-GPU VIRTUAL-SKIN-HINT"
+    CHARGE_SENSORS="VIRTUAL-SKIN-CHARGE"
     ;;
   shiba|husky|akita)
     FAMILY="Tensor G3"
     SENSORS="VIRTUAL-SKIN VIRTUAL-SKIN-CPU-MID VIRTUAL-SKIN-CPU-HIGH VIRTUAL-SKIN-CPU-LIGHT-ODPM VIRTUAL-SKIN-GPU VIRTUAL-SKIN-SOC VIRTUAL-SKIN-HINT"
+    CHARGE_SENSORS=""
     ;;
   *)
     ui_warn "Your device '${DEVICE}' is not supported."
@@ -49,55 +48,29 @@ case "${DEVICE}" in
 esac
 
 ui_ok "Device check passed — ${FAMILY} (${DEVICE})"
-ui_info "Target sensors:"
+ui_info "Target sensors (thermal_info_config.json):"
 for S in ${SENSORS}; do
   ui_info "  • ${S}"
 done
-
-# Verify source file exists
-ui_info "Locating thermal config on device..."
-
-if [ ! -f "${THERMAL_SRC}" ]; then
-  ui_warn "Could not find: ${THERMAL_SRC}"
-  ui_die  "Source thermal config missing — cannot continue."
+if [ -n "${CHARGE_SENSORS}" ]; then
+  ui_info "Target sensors (thermal_info_config_charge.json):"
+  for S in ${CHARGE_SENSORS}; do
+    ui_info "  • ${S}"
+  done
 fi
 
-if [ ! -r "${THERMAL_SRC}" ]; then
-  ui_die "Source thermal config not readable: ${THERMAL_SRC}"
-fi
+TOTAL_PATCHED=0
+TOTAL_SKIPPED=0
 
-SRC_SIZE=$(wc -c < "${THERMAL_SRC}" 2>/dev/null)
-if [ -z "${SRC_SIZE}" ] || [ "${SRC_SIZE}" -lt 100 ]; then
-  ui_die "Source thermal config looks empty or truncated (size=${SRC_SIZE})."
-fi
+patch_sensor_in_file() {
+  _file="$1"
+  _sensor="$2"
+  ui_info "  Patching ${_sensor} → PollingDelay=${NEW_DELAY}ms..."
 
-# Inherit source SELinux ctx — prevents denials on ROMs with non-default labels.
-SRC_CTX=$(ls -Zd "${THERMAL_SRC}" 2>/dev/null | awk '{print $1}')
-case "${SRC_CTX}" in
-  u:object_r:*:s0) : ;;
-  *) SRC_CTX="u:object_r:vendor_configs_file:s0" ;;
-esac
-
-ui_ok "Found: ${THERMAL_SRC} (${SRC_SIZE} bytes, ctx=${SRC_CTX})"
-ui_info "Copying thermal config into module overlay..."
-
-mkdir -p "$(dirname "${OVERLAY_DEST}")"
-cp "${THERMAL_SRC}" "${OVERLAY_DEST}"
-
-if [ $? -ne 0 ] || [ ! -f "${OVERLAY_DEST}" ]; then
-  ui_die "Failed to copy thermal config to module directory."
-fi
-
-ui_ok "Copied to overlay path"
-
-patch_sensor() {
-  sensor="$1"
-  ui_info "Patching ${sensor} → PollingDelay=${NEW_DELAY}ms..."
-
-  TMP="${OVERLAY_DEST}.tmp"
+  _tmp="${_file}.tmp"
 
   # Exit codes: 0=patched, 2=sensor not found, 3=found but no PollingDelay in window.
-  awk -v name="${sensor}" -v new="${NEW_DELAY}" '
+  awk -v name="${_sensor}" -v new="${NEW_DELAY}" '
     BEGIN {
       # Exact match avoids prefix collision (VIRTUAL-SKIN vs VIRTUAL-SKIN-CPU).
       pat = "\"Name\"[[:space:]]*:[[:space:]]*\"" name "\""
@@ -125,98 +98,43 @@ patch_sensor() {
       if (!done)      exit 3
       exit 0
     }
-  ' "${OVERLAY_DEST}" > "${TMP}"
+  ' "${_file}" > "${_tmp}"
 
-  rc=$?
+  _rc=$?
 
-  case "${rc}" in
+  case "${_rc}" in
     0)
-      if [ ! -s "${TMP}" ]; then
-        rm -f "${TMP}"
-        ui_warn "  ${sensor}: awk produced empty output — skipped."
+      if [ ! -s "${_tmp}" ]; then
+        rm -f "${_tmp}"
+        ui_warn "    ${_sensor}: awk produced empty output — skipped."
         return 1
       fi
-      mv "${TMP}" "${OVERLAY_DEST}"
-      ui_ok "  ${sensor}: patched"
+      mv "${_tmp}" "${_file}"
+      ui_ok "    ${_sensor}: patched"
       return 0
       ;;
     2)
-      rm -f "${TMP}"
-      ui_warn "  ${sensor}: not present in thermal config — skipped."
+      rm -f "${_tmp}"
+      ui_warn "    ${_sensor}: not present — skipped."
       return 1
       ;;
     3)
-      rm -f "${TMP}"
-      ui_warn "  ${sensor}: found but no PollingDelay within block — skipped."
+      rm -f "${_tmp}"
+      ui_warn "    ${_sensor}: found but no PollingDelay within block — skipped."
       return 1
       ;;
     *)
-      rm -f "${TMP}"
-      ui_warn "  ${sensor}: awk failed (rc=${rc}) — skipped."
+      rm -f "${_tmp}"
+      ui_warn "    ${_sensor}: awk failed (rc=${_rc}) — skipped."
       return 1
       ;;
   esac
 }
 
-PATCHED_COUNT=0
-SKIPPED_COUNT=0
-for SENSOR in ${SENSORS}; do
-  if patch_sensor "${SENSOR}"; then
-    PATCHED_COUNT=$((PATCHED_COUNT + 1))
-  else
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-  fi
-done
-
-if [ "${PATCHED_COUNT}" -eq 0 ]; then
-  ui_die "No sensors were patched — aborting to avoid shipping an unmodified overlay."
-fi
-
-ui_ok "Patched ${PATCHED_COUNT} sensor(s); skipped ${SKIPPED_COUNT}."
-
-# Broken JSON over /vendor/etc/ can make thermal HAL fail parsing.
-ui_info "Validating patched overlay..."
-
-OUT_SIZE=$(wc -c < "${OVERLAY_DEST}" 2>/dev/null)
-if [ -z "${OUT_SIZE}" ] || [ "${OUT_SIZE}" -lt 100 ]; then
-  ui_die "Patched file is empty/truncated (size=${OUT_SIZE})."
-fi
-
-# Digits-only sub changes size by few bytes per sensor. ±25% = generous guard.
-MIN_SIZE=$((SRC_SIZE * 3 / 4))
-MAX_SIZE=$((SRC_SIZE * 5 / 4))
-if [ "${OUT_SIZE}" -lt "${MIN_SIZE}" ] || [ "${OUT_SIZE}" -gt "${MAX_SIZE}" ]; then
-  ui_die "Patched file size (${OUT_SIZE}) out of bounds vs source (${SRC_SIZE}). Aborting."
-fi
-
-# Balanced braces/brackets → catch truncation or mid-file corruption.
-OPEN_BRACE=$(tr -cd '{' < "${OVERLAY_DEST}" | wc -c)
-CLOSE_BRACE=$(tr -cd '}' < "${OVERLAY_DEST}" | wc -c)
-OPEN_BRACK=$(tr -cd '[' < "${OVERLAY_DEST}" | wc -c)
-CLOSE_BRACK=$(tr -cd ']' < "${OVERLAY_DEST}" | wc -c)
-
-if [ "${OPEN_BRACE}" != "${CLOSE_BRACE}" ]; then
-  ui_die "JSON brace mismatch ({=${OPEN_BRACE}, }=${CLOSE_BRACE}). Aborting."
-fi
-if [ "${OPEN_BRACK}" != "${CLOSE_BRACK}" ]; then
-  ui_die "JSON bracket mismatch ([=${OPEN_BRACK}, ]=${CLOSE_BRACK}). Aborting."
-fi
-
-# Sensor count must match source — no blocks added/lost.
-SRC_SENSORS=$(grep -c '"Name"[[:space:]]*:' "${THERMAL_SRC}")
-OUT_SENSORS=$(grep -c '"Name"[[:space:]]*:' "${OVERLAY_DEST}")
-if [ "${SRC_SENSORS}" != "${OUT_SENSORS}" ]; then
-  ui_die "Sensor count changed (src=${SRC_SENSORS}, out=${OUT_SENSORS}). Aborting."
-fi
-
-ui_ok "Overlay structurally intact (${OUT_SIZE} bytes, ${OUT_SENSORS} sensors)."
-
-# Verify each patched sensor
-ui_info "Verifying patched values..."
-
-verify_sensor() {
-  sensor="$1"
-  awk -v name="${sensor}" '
+verify_sensor_in_file() {
+  _file="$1"
+  _sensor="$2"
+  awk -v name="${_sensor}" '
     BEGIN {
       pat = "\"Name\"[[:space:]]*:[[:space:]]*\"" name "\""
       in_block = 0
@@ -231,36 +149,158 @@ verify_sensor() {
       }
       if (in_block) countdown--
     }
-  ' "${OVERLAY_DEST}"
+  ' "${_file}"
 }
 
-for SENSOR in ${SENSORS}; do
-  VAL=$(verify_sensor "${SENSOR}")
-  if [ -z "${VAL}" ]; then
-    ui_warn "  ${SENSOR}: not found (skipped earlier)"
-  elif [ "${VAL}" = "${NEW_DELAY}" ]; then
-    ui_ok   "  ${SENSOR}: PollingDelay=${VAL}ms"
-  else
-    ui_warn "  ${SENSOR}: PollingDelay=${VAL}ms (expected ${NEW_DELAY}ms)"
-  fi
-done
+process_config_file() {
+  _src="$1"
+  _dest="$2"
+  _sensor_list="$3"
+  _required="$4" 
 
-ui_info "Setting file permissions..."
-set_perm "${OVERLAY_DEST}" root root 0644 "${SRC_CTX}"
-ui_ok "Permissions set (0644, ctx=${SRC_CTX})"
+  ui_print ""
+  ui_info "Processing: ${_src}"
+
+  if [ ! -f "${_src}" ]; then
+    if [ "${_required}" = "required" ]; then
+      ui_warn "Could not find: ${_src}"
+      ui_die  "Source thermal config missing — cannot continue."
+    else
+      ui_warn "Optional config not present: ${_src} — skipping."
+      return 0
+    fi
+  fi
+
+  if [ ! -r "${_src}" ]; then
+    ui_die "Source not readable: ${_src}"
+  fi
+
+  _src_size=$(wc -c < "${_src}" 2>/dev/null)
+  if [ -z "${_src_size}" ] || [ "${_src_size}" -lt 100 ]; then
+    ui_die "Source looks empty or truncated: ${_src} (size=${_src_size})."
+  fi
+
+  # Inherit source SELinux ctx — prevents denials on ROMs with non-default labels.
+  _src_ctx=$(ls -Zd "${_src}" 2>/dev/null | awk '{print $1}')
+  case "${_src_ctx}" in
+    u:object_r:*:s0) : ;;
+    *) _src_ctx="u:object_r:vendor_configs_file:s0" ;;
+  esac
+
+  ui_ok "Found: ${_src} (${_src_size} bytes, ctx=${_src_ctx})"
+
+  mkdir -p "$(dirname "${_dest}")"
+  cp "${_src}" "${_dest}"
+  if [ $? -ne 0 ] || [ ! -f "${_dest}" ]; then
+    ui_die "Failed to copy ${_src} to overlay."
+  fi
+  ui_ok "Copied to overlay: ${_dest}"
+
+  _patched=0
+  _skipped=0
+  for _sensor in ${_sensor_list}; do
+    if patch_sensor_in_file "${_dest}" "${_sensor}"; then
+      _patched=$((_patched + 1))
+    else
+      _skipped=$((_skipped + 1))
+    fi
+  done
+
+  if [ "${_patched}" -eq 0 ]; then
+    ui_die "No sensors patched in ${_dest} — aborting to avoid shipping an unmodified overlay."
+  fi
+
+  ui_ok "Patched ${_patched} sensor(s); skipped ${_skipped} in $(basename "${_dest}")."
+
+  # --- Validation ---
+  ui_info "Validating patched overlay..."
+
+  _out_size=$(wc -c < "${_dest}" 2>/dev/null)
+  if [ -z "${_out_size}" ] || [ "${_out_size}" -lt 100 ]; then
+    ui_die "Patched file is empty/truncated (size=${_out_size})."
+  fi
+
+  _min_size=$((_src_size * 3 / 4))
+  _max_size=$((_src_size * 5 / 4))
+  if [ "${_out_size}" -lt "${_min_size}" ] || [ "${_out_size}" -gt "${_max_size}" ]; then
+    ui_die "Patched file size (${_out_size}) out of bounds vs source (${_src_size}). Aborting."
+  fi
+
+  # Balanced braces/brackets → catch truncation or mid-file corruption.
+  _ob=$(tr -cd '{' < "${_dest}" | wc -c)
+  _cb=$(tr -cd '}' < "${_dest}" | wc -c)
+  _obk=$(tr -cd '[' < "${_dest}" | wc -c)
+  _cbk=$(tr -cd ']' < "${_dest}" | wc -c)
+
+  if [ "${_ob}" != "${_cb}" ]; then
+    ui_die "JSON brace mismatch ({=${_ob}, }=${_cb}). Aborting."
+  fi
+  if [ "${_obk}" != "${_cbk}" ]; then
+    ui_die "JSON bracket mismatch ([=${_obk}, ]=${_cbk}). Aborting."
+  fi
+
+  # Sensor count must match source — no blocks added/lost.
+  _src_sensors=$(grep -c '"Name"[[:space:]]*:' "${_src}")
+  _out_sensors=$(grep -c '"Name"[[:space:]]*:' "${_dest}")
+  if [ "${_src_sensors}" != "${_out_sensors}" ]; then
+    ui_die "Sensor count changed (src=${_src_sensors}, out=${_out_sensors}). Aborting."
+  fi
+
+  ui_ok "Overlay structurally intact (${_out_size} bytes, ${_out_sensors} sensors)."
+
+  # --- Verify patched values ---
+  ui_info "Verifying patched values..."
+  for _sensor in ${_sensor_list}; do
+    _val=$(verify_sensor_in_file "${_dest}" "${_sensor}")
+    if [ -z "${_val}" ]; then
+      ui_warn "  ${_sensor}: not found (skipped earlier)"
+    elif [ "${_val}" = "${NEW_DELAY}" ]; then
+      ui_ok   "  ${_sensor}: PollingDelay=${_val}ms"
+    else
+      ui_warn "  ${_sensor}: PollingDelay=${_val}ms (expected ${NEW_DELAY}ms)"
+    fi
+  done
+
+  ui_info "Setting file permissions..."
+  set_perm "${_dest}" root root 0644 "${_src_ctx}"
+  ui_ok "Permissions set (0644, ctx=${_src_ctx})"
+
+  TOTAL_PATCHED=$((TOTAL_PATCHED + _patched))
+  TOTAL_SKIPPED=$((TOTAL_SKIPPED + _skipped))
+  return 0
+}
+
+# --- Main: process the base thermal config, then the charge config on G2 -
+process_config_file \
+  "/vendor/etc/thermal_info_config.json" \
+  "${MODDIR}/system/vendor/etc/thermal_info_config.json" \
+  "${SENSORS}" \
+  "required"
+
+if [ -n "${CHARGE_SENSORS}" ]; then
+  # Charge config is optional: some ROM builds may not ship it. If it's
+  # missing we warn and move on rather than aborting the whole install.
+  process_config_file \
+    "/vendor/etc/thermal_info_config_charge.json" \
+    "${MODDIR}/system/vendor/etc/thermal_info_config_charge.json" \
+    "${CHARGE_SENSORS}" \
+    "optional"
+fi
 
 ui_print ""
 ui_print "================================================"
 ui_ok   "Installation complete!"
 ui_print ""
 ui_info "Device : ${DEVICE} (${FAMILY})"
-ui_info "File   : /vendor/etc/thermal_info_config.json"
-ui_info "Change : PollingDelay → ${NEW_DELAY}ms on:"
-for S in ${SENSORS}; do
-  ui_info "           • ${S}"
-done
+ui_info "Total  : ${TOTAL_PATCHED} sensor(s) patched, ${TOTAL_SKIPPED} skipped."
+ui_info "Files  :"
+ui_info "   • /vendor/etc/thermal_info_config.json"
+if [ -n "${CHARGE_SENSORS}" ]; then
+  ui_info "   • /vendor/etc/thermal_info_config_charge.json"
+fi
+ui_info "Change : PollingDelay → ${NEW_DELAY}ms on listed sensors."
 ui_print ""
-ui_info "Mountify will bind-mount the patched file at boot."
+ui_info "Mountify will bind-mount the patched files at boot."
 ui_info "No other sensors or values were modified."
 ui_print "================================================"
 ui_print ""
