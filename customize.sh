@@ -1,10 +1,4 @@
 #!/system/bin/sh
-# =============================================================
-#  Supported devices:
-#    Tensor G2  : cheetah, lynx, panther
-#    Tensor G3  : shiba,   husky, akita
-# =============================================================
-
 MODDIR="${MODPATH}"
 THERMAL_SRC="/vendor/etc/thermal_info_config.json"
 OVERLAY_DEST="${MODDIR}/system/vendor/etc/thermal_info_config.json"
@@ -217,7 +211,7 @@ fi
 
 ui_ok "Overlay structurally intact (${OUT_SIZE} bytes, ${OUT_SENSORS} sensors)."
 
-# ── Verify each patched sensor ────────────────────────────
+# Verify each patched sensor
 ui_info "Verifying patched values..."
 
 verify_sensor() {
